@@ -1,0 +1,1371 @@
+# Phase 1 — Core API & Data Layer Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build the foundational data layer and HTTP API for time-off requests and balance reads — schema, CRUD endpoints, and validation — with no approval flow, no HCM integration, and no balance mutation.
+
+**Architecture:** Two NestJS feature modules (`time-off`, `balance`), each with controller → service → TypeORM repository. SQLite via `better-sqlite3` (already configured in `app.module.ts`). Validation via `class-validator` + global `ValidationPipe`. UUID v4 ids generated in the service layer.
+
+**Tech Stack:** NestJS 11, TypeORM 0.3, better-sqlite3, class-validator, class-transformer, uuid, Jest, supertest.
+
+---
+
+## File Structure
+
+**New files:**
+
+- `src/time-off/time-off.module.ts` — module wiring
+- `src/time-off/time-off.entity.ts` — `TimeOffRequest` entity + status enum
+- `src/time-off/time-off.controller.ts` — HTTP routes
+- `src/time-off/time-off.service.ts` — business logic (id generation, validation, balance check)
+- `src/time-off/time-off.service.spec.ts` — unit tests (mocked repos)
+- `src/time-off/time-off.controller.spec.ts` — unit tests (mocked service)
+- `src/time-off/time-off.integration.spec.ts` — integration test (real in-memory SQLite)
+- `src/time-off/dto/create-time-off-request.dto.ts` — input DTO with validators
+- `src/balance/balance.module.ts`
+- `src/balance/balance.entity.ts`
+- `src/balance/balance.controller.ts`
+- `src/balance/balance.service.ts`
+- `src/balance/balance.service.spec.ts`
+- `src/balance/balance.controller.spec.ts`
+- `src/balance/balance.integration.spec.ts`
+- `test/time-off.e2e-spec.ts` — full HTTP create-then-fetch happy path
+
+**Modified files:**
+
+- `package.json` — add `class-validator`, `class-transformer`, `uuid`, `@types/uuid`
+- `src/app.module.ts` — register `TimeOffModule`, `BalanceModule`, add entities to TypeORM config
+- `src/main.ts` — enable global `ValidationPipe`
+
+**Removed:** `src/app.controller.ts`, `src/app.service.ts`, `src/app.controller.spec.ts` are kept as-is; they don't conflict with the new modules. Leave them alone.
+
+---
+
+## Task 1: Add dependencies
+
+**Files:**
+- Modify: `package.json`
+
+- [ ] **Step 1: Install runtime and dev dependencies**
+
+Run:
+
+```bash
+pnpm add class-validator class-transformer
+```
+
+Expected: `package.json` and `pnpm-lock.yaml` updated. No errors.
+
+> **Note (post-implementation):** the original plan added `uuid` for ID generation, but `uuid@14` ships as pure ESM and `ts-jest` cannot import it without extra transformer config. Use Node's built-in `crypto.randomUUID()` instead — same UUID v4 format, zero dependencies. Tasks 11/12 reflect this.
+
+- [ ] **Step 2: Verify install succeeded**
+
+Run: `pnpm test`
+Expected: existing app.controller test still passes (1 passed).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add package.json pnpm-lock.yaml
+git commit -m "chore: add class-validator, class-transformer, uuid"
+```
+
+---
+
+## Task 2: Define the `Balance` entity
+
+**Files:**
+- Create: `src/balance/balance.entity.ts`
+
+- [ ] **Step 1: Write the entity**
+
+Create `src/balance/balance.entity.ts`:
+
+```typescript
+import { Column, Entity, PrimaryColumn } from 'typeorm';
+
+@Entity('balances')
+export class Balance {
+  @PrimaryColumn({ type: 'text' })
+  employeeId: string;
+
+  @PrimaryColumn({ type: 'text' })
+  locationId: string;
+
+  @Column({ type: 'integer' })
+  totalDays: number;
+
+  @Column({ type: 'integer' })
+  remainingDays: number;
+}
+```
+
+Note: composite primary key `(employeeId, locationId)` — TypeORM supports this via two `@PrimaryColumn` decorators.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add src/balance/balance.entity.ts
+git commit -m "feat(balance): add Balance entity with composite PK"
+```
+
+---
+
+## Task 3: Define the `TimeOffRequest` entity
+
+**Files:**
+- Create: `src/time-off/time-off.entity.ts`
+
+- [ ] **Step 1: Write the entity and status enum**
+
+Create `src/time-off/time-off.entity.ts`:
+
+```typescript
+import { Column, Entity, Index, PrimaryColumn } from 'typeorm';
+
+export enum TimeOffStatus {
+  PENDING = 'PENDING',
+  PROCESSING = 'PROCESSING',
+  APPROVED = 'APPROVED',
+  REJECTED = 'REJECTED',
+  FAILED = 'FAILED',
+}
+
+@Entity('time_off_requests')
+export class TimeOffRequest {
+  @PrimaryColumn({ type: 'text' })
+  id: string;
+
+  @Index()
+  @Column({ type: 'text' })
+  employeeId: string;
+
+  @Column({ type: 'text' })
+  locationId: string;
+
+  @Column({ type: 'text' })
+  startDate: string;
+
+  @Column({ type: 'text' })
+  endDate: string;
+
+  @Column({ type: 'integer' })
+  daysRequested: number;
+
+  @Column({ type: 'text' })
+  status: TimeOffStatus;
+
+  @Column({ type: 'text', nullable: true })
+  managerId: string | null;
+}
+```
+
+Notes:
+- `id` is a UUID v4 generated by the service (not auto-generated by the DB) so the service can return the id immediately and tests can assert on it.
+- Dates are stored as ISO `YYYY-MM-DD` strings — no timezone math in Phase 1.
+- `@Index()` on `employeeId` because the list endpoint queries by it.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add src/time-off/time-off.entity.ts
+git commit -m "feat(time-off): add TimeOffRequest entity and status enum"
+```
+
+---
+
+## Task 4: Register entities in `AppModule`
+
+**Files:**
+- Modify: `src/app.module.ts`
+
+- [ ] **Step 1: Update the TypeORM config to include both entities**
+
+Replace the current `app.module.ts` content with:
+
+```typescript
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { Balance } from './balance/balance.entity';
+import { TimeOffRequest } from './time-off/time-off.entity';
+
+@Module({
+  imports: [
+    TypeOrmModule.forRoot({
+      type: 'better-sqlite3',
+      database: 'database.sqlite',
+      entities: [Balance, TimeOffRequest],
+      synchronize: true,
+    }),
+  ],
+  controllers: [AppController],
+  providers: [AppService],
+})
+export class AppModule {}
+```
+
+Modules will be added in Task 9 once they exist.
+
+- [ ] **Step 2: Verify the app still boots**
+
+Run: `pnpm run build`
+Expected: build succeeds, no TypeScript errors.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/app.module.ts
+git commit -m "feat: register Balance and TimeOffRequest entities in TypeORM"
+```
+
+---
+
+## Task 5: `BalanceService` — write the failing unit test
+
+**Files:**
+- Create: `src/balance/balance.service.spec.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `src/balance/balance.service.spec.ts`:
+
+```typescript
+import { NotFoundException } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Balance } from './balance.entity';
+import { BalanceService } from './balance.service';
+
+describe('BalanceService', () => {
+  let service: BalanceService;
+  let repo: jest.Mocked<Repository<Balance>>;
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      providers: [
+        BalanceService,
+        {
+          provide: getRepositoryToken(Balance),
+          useValue: { findOne: jest.fn() },
+        },
+      ],
+    }).compile();
+
+    service = module.get(BalanceService);
+    repo = module.get(getRepositoryToken(Balance));
+  });
+
+  it('returns the balance when one exists', async () => {
+    const balance: Balance = {
+      employeeId: 'emp-1',
+      locationId: 'loc-1',
+      totalDays: 20,
+      remainingDays: 15,
+    };
+    repo.findOne.mockResolvedValue(balance);
+
+    const result = await service.findOne('emp-1', 'loc-1');
+
+    expect(result).toEqual(balance);
+    expect(repo.findOne).toHaveBeenCalledWith({
+      where: { employeeId: 'emp-1', locationId: 'loc-1' },
+    });
+  });
+
+  it('throws NotFoundException when no balance exists', async () => {
+    repo.findOne.mockResolvedValue(null);
+
+    await expect(service.findOne('emp-1', 'loc-1')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm run test -- --testPathPattern=balance.service`
+Expected: FAIL with "Cannot find module './balance.service'" or similar.
+
+---
+
+## Task 6: `BalanceService` — minimal implementation to pass
+
+**Files:**
+- Create: `src/balance/balance.service.ts`
+
+- [ ] **Step 1: Write the implementation**
+
+Create `src/balance/balance.service.ts`:
+
+```typescript
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Balance } from './balance.entity';
+
+@Injectable()
+export class BalanceService {
+  constructor(
+    @InjectRepository(Balance)
+    private readonly balanceRepository: Repository<Balance>,
+  ) {}
+
+  async findOne(employeeId: string, locationId: string): Promise<Balance> {
+    const balance = await this.balanceRepository.findOne({
+      where: { employeeId, locationId },
+    });
+    if (!balance) {
+      throw new NotFoundException(
+        `Balance not found for employee ${employeeId} at location ${locationId}`,
+      );
+    }
+    return balance;
+  }
+}
+```
+
+- [ ] **Step 2: Run tests to verify they pass**
+
+Run: `pnpm run test -- --testPathPattern=balance.service`
+Expected: PASS (2 tests).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/balance/balance.service.ts src/balance/balance.service.spec.ts
+git commit -m "feat(balance): add BalanceService.findOne with NotFound handling"
+```
+
+---
+
+## Task 7: `BalanceController` — failing test, then implementation
+
+**Files:**
+- Create: `src/balance/balance.controller.spec.ts`
+- Create: `src/balance/balance.controller.ts`
+
+- [ ] **Step 1: Write the failing controller test**
+
+Create `src/balance/balance.controller.spec.ts`:
+
+```typescript
+import { Test } from '@nestjs/testing';
+import { BalanceController } from './balance.controller';
+import { BalanceService } from './balance.service';
+
+describe('BalanceController', () => {
+  let controller: BalanceController;
+  let service: jest.Mocked<BalanceService>;
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      controllers: [BalanceController],
+      providers: [{ provide: BalanceService, useValue: { findOne: jest.fn() } }],
+    }).compile();
+
+    controller = module.get(BalanceController);
+    service = module.get(BalanceService);
+  });
+
+  it('delegates GET /balances/:employeeId/:locationId to the service', async () => {
+    const balance = {
+      employeeId: 'emp-1',
+      locationId: 'loc-1',
+      totalDays: 20,
+      remainingDays: 15,
+    };
+    service.findOne.mockResolvedValue(balance);
+
+    const result = await controller.findOne('emp-1', 'loc-1');
+
+    expect(result).toEqual(balance);
+    expect(service.findOne).toHaveBeenCalledWith('emp-1', 'loc-1');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm run test -- --testPathPattern=balance.controller`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the controller**
+
+Create `src/balance/balance.controller.ts`:
+
+```typescript
+import { Controller, Get, Param } from '@nestjs/common';
+import { Balance } from './balance.entity';
+import { BalanceService } from './balance.service';
+
+@Controller('balances')
+export class BalanceController {
+  constructor(private readonly balanceService: BalanceService) {}
+
+  @Get(':employeeId/:locationId')
+  findOne(
+    @Param('employeeId') employeeId: string,
+    @Param('locationId') locationId: string,
+  ): Promise<Balance> {
+    return this.balanceService.findOne(employeeId, locationId);
+  }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pnpm run test -- --testPathPattern=balance.controller`
+Expected: PASS (1 test).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/balance/balance.controller.ts src/balance/balance.controller.spec.ts
+git commit -m "feat(balance): add BalanceController with findOne route"
+```
+
+---
+
+## Task 8: `BalanceModule`
+
+**Files:**
+- Create: `src/balance/balance.module.ts`
+
+- [ ] **Step 1: Write the module**
+
+Create `src/balance/balance.module.ts`:
+
+```typescript
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { Balance } from './balance.entity';
+import { BalanceController } from './balance.controller';
+import { BalanceService } from './balance.service';
+
+@Module({
+  imports: [TypeOrmModule.forFeature([Balance])],
+  controllers: [BalanceController],
+  providers: [BalanceService],
+  exports: [BalanceService],
+})
+export class BalanceModule {}
+```
+
+`BalanceService` is exported so `TimeOffModule` can use it for the balance check during request creation.
+
+- [ ] **Step 2: Verify build**
+
+Run: `pnpm run build`
+Expected: success.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/balance/balance.module.ts
+git commit -m "feat(balance): add BalanceModule"
+```
+
+---
+
+## Task 9: Balance integration test (real in-memory SQLite)
+
+**Files:**
+- Create: `src/balance/balance.integration.spec.ts`
+
+- [ ] **Step 1: Write the integration test**
+
+Create `src/balance/balance.integration.spec.ts`:
+
+```typescript
+import { NotFoundException } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Balance } from './balance.entity';
+import { BalanceModule } from './balance.module';
+import { BalanceService } from './balance.service';
+
+describe('BalanceService (integration)', () => {
+  let service: BalanceService;
+  let repo: Repository<Balance>;
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      imports: [
+        TypeOrmModule.forRoot({
+          type: 'better-sqlite3',
+          database: ':memory:',
+          entities: [Balance],
+          synchronize: true,
+        }),
+        BalanceModule,
+      ],
+    }).compile();
+
+    service = module.get(BalanceService);
+    repo = module.get(getRepositoryToken(Balance));
+  });
+
+  it('reads a balance that was inserted directly via the repository', async () => {
+    await repo.save({
+      employeeId: 'emp-1',
+      locationId: 'loc-1',
+      totalDays: 20,
+      remainingDays: 15,
+    });
+
+    const result = await service.findOne('emp-1', 'loc-1');
+
+    expect(result.remainingDays).toBe(15);
+  });
+
+  it('throws NotFoundException for missing balances', async () => {
+    await expect(service.findOne('nope', 'nope')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+});
+```
+
+- [ ] **Step 2: Run the integration test**
+
+Run: `pnpm run test -- --testPathPattern=balance.integration`
+Expected: PASS (2 tests).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/balance/balance.integration.spec.ts
+git commit -m "test(balance): add integration test against in-memory SQLite"
+```
+
+---
+
+## Task 10: `CreateTimeOffRequestDto`
+
+**Files:**
+- Create: `src/time-off/dto/create-time-off-request.dto.ts`
+
+- [ ] **Step 1: Write the DTO with validators**
+
+Create `src/time-off/dto/create-time-off-request.dto.ts`:
+
+```typescript
+import { IsInt, IsOptional, IsString, Matches, Min } from 'class-validator';
+
+export class CreateTimeOffRequestDto {
+  @IsString()
+  employeeId: string;
+
+  @IsString()
+  locationId: string;
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'startDate must be ISO date YYYY-MM-DD',
+  })
+  startDate: string;
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'endDate must be ISO date YYYY-MM-DD',
+  })
+  endDate: string;
+
+  @IsInt()
+  @Min(1)
+  daysRequested: number;
+
+  @IsOptional()
+  @IsString()
+  managerId?: string;
+}
+```
+
+The cross-field check `endDate >= startDate` is enforced in the service, not via a class-validator constraint (keeps DTO simple, easier to surface a clear error).
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add src/time-off/dto/create-time-off-request.dto.ts
+git commit -m "feat(time-off): add CreateTimeOffRequestDto with validators"
+```
+
+---
+
+## Task 11: `TimeOffService` — write the failing unit tests
+
+**Files:**
+- Create: `src/time-off/time-off.service.spec.ts`
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/time-off/time-off.service.spec.ts`:
+
+```typescript
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Balance } from '../balance/balance.entity';
+import { BalanceService } from '../balance/balance.service';
+import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
+import { TimeOffRequest, TimeOffStatus } from './time-off.entity';
+import { TimeOffService } from './time-off.service';
+
+describe('TimeOffService', () => {
+  let service: TimeOffService;
+  let repo: jest.Mocked<Repository<TimeOffRequest>>;
+  let balanceService: jest.Mocked<BalanceService>;
+
+  const balance: Balance = {
+    employeeId: 'emp-1',
+    locationId: 'loc-1',
+    totalDays: 20,
+    remainingDays: 10,
+  };
+
+  const validDto: CreateTimeOffRequestDto = {
+    employeeId: 'emp-1',
+    locationId: 'loc-1',
+    startDate: '2026-05-01',
+    endDate: '2026-05-05',
+    daysRequested: 5,
+  };
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      providers: [
+        TimeOffService,
+        {
+          provide: getRepositoryToken(TimeOffRequest),
+          useValue: {
+            save: jest.fn((entity) => Promise.resolve(entity)),
+            findOne: jest.fn(),
+            find: jest.fn(),
+          },
+        },
+        {
+          provide: BalanceService,
+          useValue: { findOne: jest.fn() },
+        },
+      ],
+    }).compile();
+
+    service = module.get(TimeOffService);
+    repo = module.get(getRepositoryToken(TimeOffRequest));
+    balanceService = module.get(BalanceService);
+  });
+
+  describe('create', () => {
+    it('creates a PENDING request when balance is sufficient', async () => {
+      balanceService.findOne.mockResolvedValue(balance);
+
+      const result = await service.create(validDto);
+
+      expect(result.status).toBe(TimeOffStatus.PENDING);
+      expect(result.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(result.employeeId).toBe('emp-1');
+      expect(repo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects when daysRequested exceeds remainingDays', async () => {
+      balanceService.findOne.mockResolvedValue({ ...balance, remainingDays: 3 });
+
+      await expect(service.create(validDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects when no balance row exists (NotFound surfaces as BadRequest)', async () => {
+      balanceService.findOne.mockRejectedValue(new NotFoundException());
+
+      await expect(service.create(validDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects when endDate is before startDate', async () => {
+      balanceService.findOne.mockResolvedValue(balance);
+      const bad = { ...validDto, startDate: '2026-05-10', endDate: '2026-05-05' };
+
+      await expect(service.create(bad)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('does not decrement the balance', async () => {
+      balanceService.findOne.mockResolvedValue(balance);
+
+      await service.create(validDto);
+
+      // balanceService only exposes findOne; no update method should be called.
+      expect(Object.keys(balanceService)).toEqual(['findOne']);
+    });
+  });
+
+  describe('findOne', () => {
+    it('returns the request when found', async () => {
+      const stored: TimeOffRequest = {
+        id: 'req-1',
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        startDate: '2026-05-01',
+        endDate: '2026-05-05',
+        daysRequested: 5,
+        status: TimeOffStatus.PENDING,
+        managerId: null,
+      };
+      repo.findOne.mockResolvedValue(stored);
+
+      const result = await service.findOne('req-1');
+
+      expect(result).toEqual(stored);
+      expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 'req-1' } });
+    });
+
+    it('throws NotFoundException when missing', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(service.findOne('nope')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('findByEmployee', () => {
+    it('returns all requests for an employee', async () => {
+      repo.find.mockResolvedValue([]);
+
+      const result = await service.findByEmployee('emp-1');
+
+      expect(result).toEqual([]);
+      expect(repo.find).toHaveBeenCalledWith({ where: { employeeId: 'emp-1' } });
+    });
+  });
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `pnpm run test -- --testPathPattern=time-off.service`
+Expected: FAIL — module not found.
+
+---
+
+## Task 12: `TimeOffService` — minimal implementation
+
+**Files:**
+- Create: `src/time-off/time-off.service.ts`
+
+- [ ] **Step 1: Write the implementation**
+
+Create `src/time-off/time-off.service.ts`:
+
+```typescript
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { randomUUID } from 'crypto';
+import { Repository } from 'typeorm';
+import { BalanceService } from '../balance/balance.service';
+import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
+import { TimeOffRequest, TimeOffStatus } from './time-off.entity';
+
+@Injectable()
+export class TimeOffService {
+  constructor(
+    @InjectRepository(TimeOffRequest)
+    private readonly requestRepository: Repository<TimeOffRequest>,
+    private readonly balanceService: BalanceService,
+  ) {}
+
+  async create(dto: CreateTimeOffRequestDto): Promise<TimeOffRequest> {
+    if (dto.endDate < dto.startDate) {
+      throw new BadRequestException('endDate must be on or after startDate');
+    }
+
+    let balance;
+    try {
+      balance = await this.balanceService.findOne(dto.employeeId, dto.locationId);
+    } catch (err) {
+      if (err instanceof NotFoundException) {
+        throw new BadRequestException(
+          `No balance found for employee ${dto.employeeId} at location ${dto.locationId}`,
+        );
+      }
+      throw err;
+    }
+
+    if (dto.daysRequested > balance.remainingDays) {
+      throw new BadRequestException(
+        `Requested ${dto.daysRequested} days but only ${balance.remainingDays} remain`,
+      );
+    }
+
+    const request: TimeOffRequest = {
+      id: randomUUID(),
+      employeeId: dto.employeeId,
+      locationId: dto.locationId,
+      startDate: dto.startDate,
+      endDate: dto.endDate,
+      daysRequested: dto.daysRequested,
+      status: TimeOffStatus.PENDING,
+      managerId: dto.managerId ?? null,
+    };
+
+    return this.requestRepository.save(request);
+  }
+
+  async findOne(id: string): Promise<TimeOffRequest> {
+    const request = await this.requestRepository.findOne({ where: { id } });
+    if (!request) {
+      throw new NotFoundException(`Time-off request ${id} not found`);
+    }
+    return request;
+  }
+
+  findByEmployee(employeeId: string): Promise<TimeOffRequest[]> {
+    return this.requestRepository.find({ where: { employeeId } });
+  }
+}
+```
+
+Date string comparison works because ISO `YYYY-MM-DD` is lexicographically ordered.
+
+- [ ] **Step 2: Run tests to verify they pass**
+
+Run: `pnpm run test -- --testPathPattern=time-off.service`
+Expected: PASS (8 tests).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/time-off/time-off.service.ts src/time-off/time-off.service.spec.ts
+git commit -m "feat(time-off): add TimeOffService with create, findOne, findByEmployee"
+```
+
+---
+
+## Task 13: `TimeOffController` — failing test, then implementation
+
+**Files:**
+- Create: `src/time-off/time-off.controller.spec.ts`
+- Create: `src/time-off/time-off.controller.ts`
+
+- [ ] **Step 1: Write the failing controller test**
+
+Create `src/time-off/time-off.controller.spec.ts`:
+
+```typescript
+import { Test } from '@nestjs/testing';
+import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
+import { TimeOffStatus } from './time-off.entity';
+import { TimeOffController } from './time-off.controller';
+import { TimeOffService } from './time-off.service';
+
+describe('TimeOffController', () => {
+  let controller: TimeOffController;
+  let service: jest.Mocked<TimeOffService>;
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      controllers: [TimeOffController],
+      providers: [
+        {
+          provide: TimeOffService,
+          useValue: {
+            create: jest.fn(),
+            findOne: jest.fn(),
+            findByEmployee: jest.fn(),
+          },
+        },
+      ],
+    }).compile();
+
+    controller = module.get(TimeOffController);
+    service = module.get(TimeOffService);
+  });
+
+  it('POST /timeoff/request delegates to service.create', async () => {
+    const dto: CreateTimeOffRequestDto = {
+      employeeId: 'emp-1',
+      locationId: 'loc-1',
+      startDate: '2026-05-01',
+      endDate: '2026-05-05',
+      daysRequested: 5,
+    };
+    const stored = {
+      id: 'req-1',
+      ...dto,
+      status: TimeOffStatus.PENDING,
+      managerId: null,
+    };
+    service.create.mockResolvedValue(stored);
+
+    const result = await controller.create(dto);
+
+    expect(result).toEqual(stored);
+    expect(service.create).toHaveBeenCalledWith(dto);
+  });
+
+  it('GET /timeoff/:id delegates to service.findOne', async () => {
+    const stored = {
+      id: 'req-1',
+      employeeId: 'emp-1',
+      locationId: 'loc-1',
+      startDate: '2026-05-01',
+      endDate: '2026-05-05',
+      daysRequested: 5,
+      status: TimeOffStatus.PENDING,
+      managerId: null,
+    };
+    service.findOne.mockResolvedValue(stored);
+
+    const result = await controller.findOne('req-1');
+
+    expect(result).toEqual(stored);
+    expect(service.findOne).toHaveBeenCalledWith('req-1');
+  });
+
+  it('GET /timeoff?employeeId=... delegates to service.findByEmployee', async () => {
+    service.findByEmployee.mockResolvedValue([]);
+
+    const result = await controller.findByEmployee('emp-1');
+
+    expect(result).toEqual([]);
+    expect(service.findByEmployee).toHaveBeenCalledWith('emp-1');
+  });
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pnpm run test -- --testPathPattern=time-off.controller`
+Expected: FAIL — module not found.
+
+- [ ] **Step 3: Write the controller**
+
+Create `src/time-off/time-off.controller.ts`:
+
+```typescript
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
+import { TimeOffRequest } from './time-off.entity';
+import { TimeOffService } from './time-off.service';
+
+@Controller('timeoff')
+export class TimeOffController {
+  constructor(private readonly timeOffService: TimeOffService) {}
+
+  @Post('request')
+  create(@Body() dto: CreateTimeOffRequestDto): Promise<TimeOffRequest> {
+    return this.timeOffService.create(dto);
+  }
+
+  @Get(':id')
+  findOne(@Param('id') id: string): Promise<TimeOffRequest> {
+    return this.timeOffService.findOne(id);
+  }
+
+  @Get()
+  findByEmployee(
+    @Query('employeeId') employeeId: string,
+  ): Promise<TimeOffRequest[]> {
+    return this.timeOffService.findByEmployee(employeeId);
+  }
+}
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pnpm run test -- --testPathPattern=time-off.controller`
+Expected: PASS (3 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/time-off/time-off.controller.ts src/time-off/time-off.controller.spec.ts
+git commit -m "feat(time-off): add TimeOffController with create, findOne, list-by-employee"
+```
+
+---
+
+## Task 14: `TimeOffModule`
+
+**Files:**
+- Create: `src/time-off/time-off.module.ts`
+
+- [ ] **Step 1: Write the module**
+
+Create `src/time-off/time-off.module.ts`:
+
+```typescript
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { BalanceModule } from '../balance/balance.module';
+import { TimeOffController } from './time-off.controller';
+import { TimeOffRequest } from './time-off.entity';
+import { TimeOffService } from './time-off.service';
+
+@Module({
+  imports: [TypeOrmModule.forFeature([TimeOffRequest]), BalanceModule],
+  controllers: [TimeOffController],
+  providers: [TimeOffService],
+})
+export class TimeOffModule {}
+```
+
+- [ ] **Step 2: Verify build**
+
+Run: `pnpm run build`
+Expected: success.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/time-off/time-off.module.ts
+git commit -m "feat(time-off): add TimeOffModule"
+```
+
+---
+
+## Task 15: Wire the modules into `AppModule` and enable `ValidationPipe`
+
+**Files:**
+- Modify: `src/app.module.ts`
+- Modify: `src/main.ts`
+
+- [ ] **Step 1: Register the feature modules**
+
+Replace `src/app.module.ts`:
+
+```typescript
+import { Module } from '@nestjs/common';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { Balance } from './balance/balance.entity';
+import { BalanceModule } from './balance/balance.module';
+import { TimeOffRequest } from './time-off/time-off.entity';
+import { TimeOffModule } from './time-off/time-off.module';
+
+@Module({
+  imports: [
+    TypeOrmModule.forRoot({
+      type: 'better-sqlite3',
+      database: 'database.sqlite',
+      entities: [Balance, TimeOffRequest],
+      synchronize: true,
+    }),
+    BalanceModule,
+    TimeOffModule,
+  ],
+  controllers: [AppController],
+  providers: [AppService],
+})
+export class AppModule {}
+```
+
+- [ ] **Step 2: Enable global `ValidationPipe`**
+
+Replace `src/main.ts`:
+
+```typescript
+import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.useGlobalPipes(
+    new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }),
+  );
+  await app.listen(process.env.PORT ?? 3000);
+}
+bootstrap();
+```
+
+- [ ] **Step 3: Verify the app boots and the full unit test suite is green**
+
+Run:
+```bash
+pnpm run build
+pnpm run test
+```
+
+Expected: build succeeds; all unit + integration tests pass.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/app.module.ts src/main.ts
+git commit -m "feat: wire BalanceModule and TimeOffModule into AppModule with global ValidationPipe"
+```
+
+---
+
+## Task 16: TimeOff integration test (real in-memory SQLite)
+
+**Files:**
+- Create: `src/time-off/time-off.integration.spec.ts`
+
+- [ ] **Step 1: Write the integration test**
+
+Create `src/time-off/time-off.integration.spec.ts`:
+
+```typescript
+import { BadRequestException } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { Balance } from '../balance/balance.entity';
+import { BalanceModule } from '../balance/balance.module';
+import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
+import { TimeOffRequest, TimeOffStatus } from './time-off.entity';
+import { TimeOffModule } from './time-off.module';
+import { TimeOffService } from './time-off.service';
+
+describe('TimeOffService (integration)', () => {
+  let service: TimeOffService;
+  let balanceRepo: Repository<Balance>;
+  let requestRepo: Repository<TimeOffRequest>;
+
+  beforeEach(async () => {
+    const module = await Test.createTestingModule({
+      imports: [
+        TypeOrmModule.forRoot({
+          type: 'better-sqlite3',
+          database: ':memory:',
+          entities: [Balance, TimeOffRequest],
+          synchronize: true,
+        }),
+        BalanceModule,
+        TimeOffModule,
+      ],
+    }).compile();
+
+    service = module.get(TimeOffService);
+    balanceRepo = module.get(getRepositoryToken(Balance));
+    requestRepo = module.get(getRepositoryToken(TimeOffRequest));
+  });
+
+  const dto: CreateTimeOffRequestDto = {
+    employeeId: 'emp-1',
+    locationId: 'loc-1',
+    startDate: '2026-05-01',
+    endDate: '2026-05-05',
+    daysRequested: 5,
+  };
+
+  it('persists a PENDING request and leaves the balance untouched', async () => {
+    await balanceRepo.save({
+      employeeId: 'emp-1',
+      locationId: 'loc-1',
+      totalDays: 20,
+      remainingDays: 10,
+    });
+
+    const created = await service.create(dto);
+
+    const stored = await requestRepo.findOne({ where: { id: created.id } });
+    expect(stored?.status).toBe(TimeOffStatus.PENDING);
+
+    const balanceAfter = await balanceRepo.findOne({
+      where: { employeeId: 'emp-1', locationId: 'loc-1' },
+    });
+    expect(balanceAfter?.remainingDays).toBe(10);
+  });
+
+  it('rejects creation when no balance exists', async () => {
+    await expect(service.create(dto)).rejects.toBeInstanceOf(BadRequestException);
+    const count = await requestRepo.count();
+    expect(count).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: Run the integration test**
+
+Run: `pnpm run test -- --testPathPattern=time-off.integration`
+Expected: PASS (2 tests).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/time-off/time-off.integration.spec.ts
+git commit -m "test(time-off): add integration test for create flow"
+```
+
+---
+
+## Task 17: E2E happy-path test
+
+**Files:**
+- Create: `test/time-off.e2e-spec.ts`
+
+- [ ] **Step 1: Write the e2e test**
+
+Create `test/time-off.e2e-spec.ts`:
+
+```typescript
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import * as request from 'supertest';
+import { Balance } from '../src/balance/balance.entity';
+import { BalanceModule } from '../src/balance/balance.module';
+import { TimeOffRequest } from '../src/time-off/time-off.entity';
+import { TimeOffModule } from '../src/time-off/time-off.module';
+
+describe('Time-off (e2e)', () => {
+  let app: INestApplication;
+  let balanceRepo: Repository<Balance>;
+
+  beforeAll(async () => {
+    const module = await Test.createTestingModule({
+      imports: [
+        TypeOrmModule.forRoot({
+          type: 'better-sqlite3',
+          database: ':memory:',
+          entities: [Balance, TimeOffRequest],
+          synchronize: true,
+        }),
+        BalanceModule,
+        TimeOffModule,
+      ],
+    }).compile();
+
+    app = module.createNestApplication();
+    app.useGlobalPipes(
+      new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }),
+    );
+    await app.init();
+
+    balanceRepo = module.get(getRepositoryToken(Balance));
+    await balanceRepo.save({
+      employeeId: 'emp-1',
+      locationId: 'loc-1',
+      totalDays: 20,
+      remainingDays: 10,
+    });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it('creates a request, fetches it back, and reads the balance', async () => {
+    const created = await request(app.getHttpServer())
+      .post('/timeoff/request')
+      .send({
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        startDate: '2026-05-01',
+        endDate: '2026-05-05',
+        daysRequested: 5,
+      })
+      .expect(201);
+
+    expect(created.body.status).toBe('PENDING');
+    const id = created.body.id;
+
+    const fetched = await request(app.getHttpServer())
+      .get(`/timeoff/${id}`)
+      .expect(200);
+    expect(fetched.body.id).toBe(id);
+
+    const list = await request(app.getHttpServer())
+      .get('/timeoff?employeeId=emp-1')
+      .expect(200);
+    expect(list.body).toHaveLength(1);
+
+    const balance = await request(app.getHttpServer())
+      .get('/balances/emp-1/loc-1')
+      .expect(200);
+    expect(balance.body.remainingDays).toBe(10);
+  });
+
+  it('rejects a request that exceeds remaining balance with 400', async () => {
+    await request(app.getHttpServer())
+      .post('/timeoff/request')
+      .send({
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        startDate: '2026-06-01',
+        endDate: '2026-06-30',
+        daysRequested: 30,
+      })
+      .expect(400);
+  });
+});
+```
+
+- [ ] **Step 2: Run the e2e test**
+
+Run: `pnpm run test:e2e`
+Expected: PASS (2 tests).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add test/time-off.e2e-spec.ts
+git commit -m "test(e2e): add time-off create-then-fetch happy path"
+```
+
+---
+
+## Task 18: Final verification
+
+- [ ] **Step 1: Run the full test suite**
+
+Run:
+```bash
+pnpm run lint
+pnpm run test
+pnpm run test:e2e
+pnpm run build
+```
+
+Expected: lint clean, all unit + integration tests pass, e2e tests pass, build succeeds.
+
+- [ ] **Step 2: Manual smoke test**
+
+Run: `pnpm run start:dev`
+
+In another terminal:
+```bash
+# Should fail — no balance seeded
+curl -X POST http://localhost:3000/timeoff/request \
+  -H 'Content-Type: application/json' \
+  -d '{"employeeId":"emp-1","locationId":"loc-1","startDate":"2026-05-01","endDate":"2026-05-05","daysRequested":5}'
+# Expected: 400 with "No balance found..."
+```
+
+Note: the dev DB persists in `database.sqlite`. To seed a balance for manual testing, use a SQLite client to insert into the `balances` table, or skip this step (automated tests cover the happy path).
+
+Stop the dev server with Ctrl+C.
+
+- [ ] **Step 3: Phase 1 complete — no commit needed**
+
+The work is already on `feature/core-api-logic`. When ready, merge or open a PR per your usual workflow.
+
+---
+
+## Self-Review Notes
+
+- **Spec coverage:** schema (Tasks 2, 3, 4) ✓, TimeOffRequest CRUD-minus-update-delete (Tasks 11–14) ✓, balance retrieval (Tasks 5–9) ✓, simple request creation flow with balance check (Tasks 11, 12) ✓. Update/delete on TimeOffRequest are not in scope — the brief said "Basic CRUD" but the constraints rule out approval/rejection (the only realistic mutations) until Phase 2; pure update/delete endpoints would be premature.
+- **No HCM, no retries, no batch sync, no advanced error handling** — confirmed absent.
+- **Type consistency:** `TimeOffStatus` enum, `TimeOffRequest`/`Balance` entity field names, and DTO names are used identically across all tasks.
+- **No placeholders** — every code step is complete.
