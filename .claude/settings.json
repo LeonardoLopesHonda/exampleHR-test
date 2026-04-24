@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sqlite": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sqlite",
+        "C:/Users/leonardo.honda/OneDrive - Vetria Mineração S.A/Documentos/tests/exampleHR-test/database.sqlite"
+      ]
+    }
+  }
+}
