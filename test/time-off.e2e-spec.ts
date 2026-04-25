@@ -101,4 +101,111 @@ describe('TimeOff (e2e)', () => {
       })
       .expect(400);
   });
+
+  it('POST /timeoff/:id/approve approves and decrements the balance', async () => {
+    const create = await request(app.getHttpServer())
+      .post('/timeoff/request')
+      .send({
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        startDate: '2026-05-01',
+        endDate: '2026-05-04',
+        daysRequested: 4,
+      })
+      .expect(201);
+    const id = (create.body as TimeOffRequest).id;
+
+    const approved = await request(app.getHttpServer())
+      .post(`/timeoff/${id}/approve`)
+      .send({ managerId: 'mgr-1' })
+      .expect(201);
+
+    const body = approved.body as TimeOffRequest;
+    expect(body.status).toBe(TimeOffStatus.APPROVED);
+    expect(body.managerId).toBe('mgr-1');
+
+    const balance = await request(app.getHttpServer())
+      .get('/balances/emp-1/loc-1')
+      .expect(200);
+    expect((balance.body as Balance).remainingDays).toBe(11);
+  });
+
+  it('POST /timeoff/:id/approve a second time returns 400', async () => {
+    const create = await request(app.getHttpServer())
+      .post('/timeoff/request')
+      .send({
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        startDate: '2026-05-01',
+        endDate: '2026-05-04',
+        daysRequested: 4,
+      })
+      .expect(201);
+    const id = (create.body as TimeOffRequest).id;
+
+    await request(app.getHttpServer())
+      .post(`/timeoff/${id}/approve`)
+      .send({ managerId: 'mgr-1' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/timeoff/${id}/approve`)
+      .send({ managerId: 'mgr-2' })
+      .expect(400);
+  });
+
+  it('POST /timeoff/:id/reject persists managerId and reason without touching balance', async () => {
+    const create = await request(app.getHttpServer())
+      .post('/timeoff/request')
+      .send({
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        startDate: '2026-05-01',
+        endDate: '2026-05-04',
+        daysRequested: 4,
+      })
+      .expect(201);
+    const id = (create.body as TimeOffRequest).id;
+
+    const rejected = await request(app.getHttpServer())
+      .post(`/timeoff/${id}/reject`)
+      .send({ managerId: 'mgr-1', reason: 'peak season' })
+      .expect(201);
+
+    const body = rejected.body as TimeOffRequest;
+    expect(body.status).toBe(TimeOffStatus.REJECTED);
+    expect(body.managerId).toBe('mgr-1');
+    expect(body.rejectionReason).toBe('peak season');
+
+    const balance = await request(app.getHttpServer())
+      .get('/balances/emp-1/loc-1')
+      .expect(200);
+    expect((balance.body as Balance).remainingDays).toBe(15);
+  });
+
+  it('POST /timeoff/:id/approve returns 400 when body is missing managerId', async () => {
+    const create = await request(app.getHttpServer())
+      .post('/timeoff/request')
+      .send({
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        startDate: '2026-05-01',
+        endDate: '2026-05-04',
+        daysRequested: 4,
+      })
+      .expect(201);
+    const id = (create.body as TimeOffRequest).id;
+
+    await request(app.getHttpServer())
+      .post(`/timeoff/${id}/approve`)
+      .send({})
+      .expect(400);
+  });
+
+  it('POST /timeoff/:id/approve on missing id returns 404', async () => {
+    await request(app.getHttpServer())
+      .post('/timeoff/00000000-0000-4000-8000-000000000000/approve')
+      .send({ managerId: 'mgr-1' })
+      .expect(404);
+  });
 });

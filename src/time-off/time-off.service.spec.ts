@@ -1,9 +1,10 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Balance } from '../balance/balance.entity';
 import { BalanceService } from '../balance/balance.service';
+import { HcmMockClient } from '../hcm/hcm.client';
 import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
 import { TimeOffRequest, TimeOffStatus } from './time-off.entity';
 import { TimeOffService } from './time-off.service';
@@ -12,6 +13,9 @@ describe('TimeOffService', () => {
   let service: TimeOffService;
   let repo: jest.Mocked<Repository<TimeOffRequest>>;
   let balanceService: jest.Mocked<BalanceService>;
+  let hcm: jest.Mocked<HcmMockClient>;
+  let txnRepo: jest.Mocked<Repository<TimeOffRequest>>;
+  let txnManager: EntityManager;
 
   const balance: Balance = {
     employeeId: 'emp-1',
@@ -28,7 +32,32 @@ describe('TimeOffService', () => {
     daysRequested: 5,
   };
 
+  const pendingRequest: TimeOffRequest = {
+    id: 'req-1',
+    employeeId: 'emp-1',
+    locationId: 'loc-1',
+    startDate: '2026-05-01',
+    endDate: '2026-05-05',
+    daysRequested: 5,
+    status: TimeOffStatus.PENDING,
+    managerId: null,
+    rejectionReason: null,
+  };
+
   beforeEach(async () => {
+    txnRepo = {
+      findOne: jest.fn(),
+      save: jest.fn().mockImplementation(async (e) => e),
+    } as unknown as jest.Mocked<Repository<TimeOffRequest>>;
+
+    txnManager = {
+      getRepository: jest.fn().mockReturnValue(txnRepo),
+    } as unknown as EntityManager;
+
+    const dataSource = {
+      transaction: jest.fn().mockImplementation(async (cb) => cb(txnManager)),
+    } as unknown as DataSource;
+
     const module = await Test.createTestingModule({
       providers: [
         TimeOffService,
@@ -42,14 +71,20 @@ describe('TimeOffService', () => {
         },
         {
           provide: BalanceService,
-          useValue: { findOne: jest.fn() },
+          useValue: { findOne: jest.fn(), decrement: jest.fn() },
         },
+        {
+          provide: HcmMockClient,
+          useValue: { submitApproval: jest.fn() },
+        },
+        { provide: DataSource, useValue: dataSource },
       ],
     }).compile();
 
     service = module.get(TimeOffService);
     repo = module.get(getRepositoryToken(TimeOffRequest));
     balanceService = module.get(BalanceService);
+    hcm = module.get(HcmMockClient);
   });
 
   describe('create', () => {
@@ -106,28 +141,17 @@ describe('TimeOffService', () => {
 
       await service.create(validDto);
 
-      // balanceService only exposes findOne; no update method should be called.
-      expect(Object.keys(balanceService)).toEqual(['findOne']);
+      expect(balanceService.decrement).not.toHaveBeenCalled();
     });
   });
 
   describe('findOne', () => {
     it('returns the request when found', async () => {
-      const stored: TimeOffRequest = {
-        id: 'req-1',
-        employeeId: 'emp-1',
-        locationId: 'loc-1',
-        startDate: '2026-05-01',
-        endDate: '2026-05-05',
-        daysRequested: 5,
-        status: TimeOffStatus.PENDING,
-        managerId: null,
-      };
-      repo.findOne.mockResolvedValue(stored);
+      repo.findOne.mockResolvedValue(pendingRequest);
 
       const result = await service.findOne('req-1');
 
-      expect(result).toEqual(stored);
+      expect(result).toEqual(pendingRequest);
       expect(repo.findOne).toHaveBeenCalledWith({ where: { id: 'req-1' } });
     });
 
@@ -150,6 +174,155 @@ describe('TimeOffService', () => {
       expect(repo.find).toHaveBeenCalledWith({
         where: { employeeId: 'emp-1' },
       });
+    });
+  });
+
+  describe('approve', () => {
+    it('flips PENDING -> PROCESSING -> APPROVED, calls HCM in between, decrements balance', async () => {
+      txnRepo.findOne.mockResolvedValue({ ...pendingRequest });
+      const savedStatuses: TimeOffStatus[] = [];
+      txnRepo.save.mockImplementation(async (e) => {
+        savedStatuses.push((e as TimeOffRequest).status);
+        return e as TimeOffRequest;
+      });
+      hcm.submitApproval.mockResolvedValue({ hcmReferenceId: 'hcm-ref-1' });
+      balanceService.decrement.mockResolvedValue({
+        ...balance,
+        remainingDays: 5,
+      });
+
+      const result = await service.approve('req-1', { managerId: 'mgr-1' });
+
+      expect(savedStatuses).toEqual([
+        TimeOffStatus.PROCESSING,
+        TimeOffStatus.APPROVED,
+      ]);
+
+      expect(hcm.submitApproval).toHaveBeenCalledWith({
+        requestId: 'req-1',
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        daysRequested: 5,
+        managerId: 'mgr-1',
+      });
+
+      expect(balanceService.decrement).toHaveBeenCalledWith(
+        'emp-1',
+        'loc-1',
+        5,
+        expect.anything(),
+      );
+
+      expect(result.status).toBe(TimeOffStatus.APPROVED);
+      expect(result.managerId).toBe('mgr-1');
+    });
+
+    it('writes PROCESSING BEFORE invoking HCM', async () => {
+      txnRepo.findOne.mockResolvedValue({ ...pendingRequest });
+      const observed: TimeOffStatus[] = [];
+      hcm.submitApproval.mockImplementation(async () => {
+        const last = txnRepo.save.mock.calls.at(-1)?.[0] as
+          | TimeOffRequest
+          | undefined;
+        observed.push(last!.status);
+        return { hcmReferenceId: 'hcm-ref-2' };
+      });
+      balanceService.decrement.mockResolvedValue(balance);
+
+      await service.approve('req-1', { managerId: 'mgr-1' });
+
+      expect(observed).toEqual([TimeOffStatus.PROCESSING]);
+    });
+
+    it('writes APPROVED and decrements only AFTER HCM resolves', async () => {
+      txnRepo.findOne.mockResolvedValue({ ...pendingRequest });
+      const savedStatuses: TimeOffStatus[] = [];
+      txnRepo.save.mockImplementation(async (e) => {
+        savedStatuses.push((e as TimeOffRequest).status);
+        return e as TimeOffRequest;
+      });
+      let hcmReturned = false;
+      hcm.submitApproval.mockImplementation(async () => {
+        hcmReturned = true;
+        return { hcmReferenceId: 'hcm-ref-3' };
+      });
+      balanceService.decrement.mockImplementation(async () => {
+        expect(hcmReturned).toBe(true);
+        return balance;
+      });
+
+      await service.approve('req-1', { managerId: 'mgr-1' });
+
+      expect(savedStatuses[1]).toBe(TimeOffStatus.APPROVED);
+    });
+
+    it('throws NotFoundException when the request does not exist', async () => {
+      txnRepo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.approve('missing', { managerId: 'mgr-1' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(hcm.submitApproval).not.toHaveBeenCalled();
+      expect(balanceService.decrement).not.toHaveBeenCalled();
+    });
+
+    it('rejects approving a non-PENDING request with BadRequestException', async () => {
+      txnRepo.findOne.mockResolvedValue({
+        ...pendingRequest,
+        status: TimeOffStatus.APPROVED,
+      });
+
+      await expect(
+        service.approve('req-1', { managerId: 'mgr-1' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(hcm.submitApproval).not.toHaveBeenCalled();
+      expect(balanceService.decrement).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('reject', () => {
+    it('flips PENDING -> REJECTED, persists managerId and reason, no HCM, no balance change', async () => {
+      repo.findOne.mockResolvedValue({ ...pendingRequest });
+
+      const result = await service.reject('req-1', {
+        managerId: 'mgr-1',
+        reason: 'overlap with peak season',
+      });
+
+      expect(result.status).toBe(TimeOffStatus.REJECTED);
+      expect(result.managerId).toBe('mgr-1');
+      expect(result.rejectionReason).toBe('overlap with peak season');
+      expect(repo.save).toHaveBeenCalledTimes(1);
+      expect(hcm.submitApproval).not.toHaveBeenCalled();
+      expect(balanceService.decrement).not.toHaveBeenCalled();
+    });
+
+    it('persists null rejectionReason when reason is omitted', async () => {
+      repo.findOne.mockResolvedValue({ ...pendingRequest });
+
+      const result = await service.reject('req-1', { managerId: 'mgr-1' });
+
+      expect(result.rejectionReason).toBeNull();
+    });
+
+    it('throws NotFoundException when the request does not exist', async () => {
+      repo.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.reject('missing', { managerId: 'mgr-1' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('rejects rejecting a non-PENDING request with BadRequestException', async () => {
+      repo.findOne.mockResolvedValue({
+        ...pendingRequest,
+        status: TimeOffStatus.REJECTED,
+      });
+
+      await expect(
+        service.reject('req-1', { managerId: 'mgr-1' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(repo.save).not.toHaveBeenCalled();
     });
   });
 });
