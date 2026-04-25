@@ -7,6 +7,8 @@ import { BalanceModule } from './balance/balance.module';
 import { Balance } from './balance/balance.entity';
 import { IdempotencyKey } from './idempotency/idempotency-key.entity';
 import { IdempotencyModule } from './idempotency/idempotency.module';
+import { RetryJob } from './retry/retry-job.entity';
+import { RetryModule } from './retry/retry.module';
 import { TimeOffModule } from './time-off/time-off.module';
 import { TimeOffRequest } from './time-off/time-off.entity';
 
@@ -16,11 +18,12 @@ import { TimeOffRequest } from './time-off/time-off.entity';
     TypeOrmModule.forRoot({
       type: 'better-sqlite3',
       database: 'database.sqlite',
-      entities: [Balance, TimeOffRequest, IdempotencyKey],
+      entities: [Balance, TimeOffRequest, IdempotencyKey, RetryJob],
       synchronize: true,
     }),
     BalanceModule,
     IdempotencyModule,
+    RetryModule,
     TimeOffModule,
   ],
   controllers: [AppController],
