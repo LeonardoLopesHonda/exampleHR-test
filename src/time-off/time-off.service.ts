@@ -54,6 +54,7 @@ export class TimeOffService {
       daysRequested: dto.daysRequested,
       status: TimeOffStatus.PENDING,
       managerId: dto.managerId ?? null,
+      rejectionReason: null,
     };
 
     return this.requestRepository.save(request);

@@ -122,6 +122,7 @@ describe('TimeOffService', () => {
         daysRequested: 5,
         status: TimeOffStatus.PENDING,
         managerId: null,
+        rejectionReason: null,
       };
       repo.findOne.mockResolvedValue(stored);
 

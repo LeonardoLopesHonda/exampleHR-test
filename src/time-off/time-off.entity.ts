@@ -34,4 +34,7 @@ export class TimeOffRequest {
 
   @Column({ type: 'text', nullable: true })
   managerId: string | null;
+
+  @Column({ type: 'text', nullable: true })
+  rejectionReason: string | null;
 }

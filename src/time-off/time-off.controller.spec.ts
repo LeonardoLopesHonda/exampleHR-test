@@ -40,6 +40,7 @@ describe('TimeOffController', () => {
       ...dto,
       status: TimeOffStatus.PENDING,
       managerId: null,
+      rejectionReason: null,
     };
     service.create.mockResolvedValue(stored);
 
@@ -59,6 +60,7 @@ describe('TimeOffController', () => {
       daysRequested: 5,
       status: TimeOffStatus.PENDING,
       managerId: null,
+      rejectionReason: null,
     };
     service.findOne.mockResolvedValue(stored);
 
