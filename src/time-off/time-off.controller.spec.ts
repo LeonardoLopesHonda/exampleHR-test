@@ -1,4 +1,6 @@
 import { Test } from '@nestjs/testing';
+import { IdempotencyInterceptor } from '../idempotency/idempotency.interceptor';
+import { IdempotencyService } from '../idempotency/idempotency.service';
 import { ApproveTimeOffRequestDto } from './dto/approve-time-off-request.dto';
 import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
 import { RejectTimeOffRequestDto } from './dto/reject-time-off-request.dto';
@@ -24,6 +26,8 @@ describe('TimeOffController', () => {
             reject: jest.fn(),
           },
         },
+        { provide: IdempotencyService, useValue: {} },
+        { provide: IdempotencyInterceptor, useValue: {} },
       ],
     }).compile();
 

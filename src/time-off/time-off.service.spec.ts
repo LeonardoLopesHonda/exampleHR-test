@@ -5,6 +5,9 @@ import { DataSource, EntityManager, Repository } from 'typeorm';
 import { Balance } from '../balance/balance.entity';
 import { BalanceService } from '../balance/balance.service';
 import { HcmMockClient } from '../hcm/hcm.client';
+import { HcmPermanentError, HcmTransientError } from '../hcm/hcm.errors';
+import { RetryJobType } from '../retry/retry-job.entity';
+import { RetryService } from '../retry/retry.service';
 import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
 import { TimeOffRequest, TimeOffStatus } from './time-off.entity';
 import { TimeOffService } from './time-off.service';
@@ -14,6 +17,7 @@ describe('TimeOffService', () => {
   let repo: jest.Mocked<Repository<TimeOffRequest>>;
   let balanceService: jest.Mocked<BalanceService>;
   let hcm: jest.Mocked<HcmMockClient>;
+  let retryService: jest.Mocked<RetryService>;
   let txnRepo: jest.Mocked<Repository<TimeOffRequest>>;
   let txnManager: EntityManager;
 
@@ -77,6 +81,10 @@ describe('TimeOffService', () => {
           provide: HcmMockClient,
           useValue: { submitApproval: jest.fn() },
         },
+        {
+          provide: RetryService,
+          useValue: { enqueue: jest.fn() },
+        },
         { provide: DataSource, useValue: dataSource },
       ],
     }).compile();
@@ -85,6 +93,7 @@ describe('TimeOffService', () => {
     repo = module.get(getRepositoryToken(TimeOffRequest));
     balanceService = module.get(BalanceService);
     hcm = module.get(HcmMockClient);
+    retryService = module.get(RetryService);
   });
 
   describe('create', () => {
@@ -277,6 +286,52 @@ describe('TimeOffService', () => {
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(hcm.submitApproval).not.toHaveBeenCalled();
       expect(balanceService.decrement).not.toHaveBeenCalled();
+    });
+
+    it('on HcmTransientError: stays PROCESSING and enqueues HCM_APPROVAL retry', async () => {
+      txnRepo.findOne.mockResolvedValue({ ...pendingRequest });
+      hcm.submitApproval.mockRejectedValue(
+        new HcmTransientError('5xx from HCM'),
+      );
+
+      const result = await service.approve('req-1', { managerId: 'mgr-1' });
+
+      expect(result.status).toBe(TimeOffStatus.PROCESSING);
+      expect(retryService.enqueue).toHaveBeenCalledWith(
+        RetryJobType.HCM_APPROVAL,
+        'req-1',
+        { managerId: 'mgr-1' },
+      );
+      expect(balanceService.decrement).not.toHaveBeenCalled();
+    });
+
+    it('on HcmPermanentError: marks FAILED and does NOT enqueue', async () => {
+      txnRepo.findOne.mockResolvedValue({ ...pendingRequest });
+      hcm.submitApproval.mockRejectedValue(
+        new HcmPermanentError('insufficient balance per HCM'),
+      );
+
+      const result = await service.approve('req-1', { managerId: 'mgr-1' });
+
+      expect(result.status).toBe(TimeOffStatus.FAILED);
+      expect(result.rejectionReason).toBe('insufficient balance per HCM');
+      expect(retryService.enqueue).not.toHaveBeenCalled();
+      expect(balanceService.decrement).not.toHaveBeenCalled();
+    });
+
+    it('on Tx2 failure after HCM success: stays PROCESSING and enqueues LOCAL_BALANCE_APPLY', async () => {
+      txnRepo.findOne.mockResolvedValue({ ...pendingRequest });
+      hcm.submitApproval.mockResolvedValue({ hcmReferenceId: 'hcm-ref-x' });
+      balanceService.decrement.mockRejectedValue(new Error('lock timeout'));
+
+      const result = await service.approve('req-1', { managerId: 'mgr-1' });
+
+      expect(result.status).toBe(TimeOffStatus.PROCESSING);
+      expect(retryService.enqueue).toHaveBeenCalledWith(
+        RetryJobType.LOCAL_BALANCE_APPLY,
+        'req-1',
+        { managerId: 'mgr-1' },
+      );
     });
   });
 

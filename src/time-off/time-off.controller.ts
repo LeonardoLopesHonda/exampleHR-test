@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Query,
+  UseInterceptors,
+} from '@nestjs/common';
+import { IdempotencyInterceptor } from '../idempotency/idempotency.interceptor';
 import { ApproveTimeOffRequestDto } from './dto/approve-time-off-request.dto';
 import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
 import { RejectTimeOffRequestDto } from './dto/reject-time-off-request.dto';
@@ -10,6 +19,7 @@ export class TimeOffController {
   constructor(private readonly timeOffService: TimeOffService) {}
 
   @Post('request')
+  @UseInterceptors(IdempotencyInterceptor)
   create(@Body() dto: CreateTimeOffRequestDto): Promise<TimeOffRequest> {
     return this.timeOffService.create(dto);
   }
@@ -27,6 +37,7 @@ export class TimeOffController {
   }
 
   @Post(':id/approve')
+  @UseInterceptors(IdempotencyInterceptor)
   approve(
     @Param('id') id: string,
     @Body() dto: ApproveTimeOffRequestDto,
@@ -35,6 +46,7 @@ export class TimeOffController {
   }
 
   @Post(':id/reject')
+  @UseInterceptors(IdempotencyInterceptor)
   reject(
     @Param('id') id: string,
     @Body() dto: RejectTimeOffRequestDto,
