@@ -1,6 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
 import { Balance } from './balance.entity';
 
 @Injectable()
@@ -20,5 +24,28 @@ export class BalanceService {
       );
     }
     return balance;
+  }
+
+  async decrement(
+    employeeId: string,
+    locationId: string,
+    days: number,
+    manager?: EntityManager,
+  ): Promise<Balance> {
+    const repo = manager ? manager.getRepository(Balance) : this.balanceRepository;
+
+    const balance = await repo.findOne({ where: { employeeId, locationId } });
+    if (!balance) {
+      throw new NotFoundException(
+        `Balance not found for employee ${employeeId} at location ${locationId}`,
+      );
+    }
+    if (balance.remainingDays < days) {
+      throw new BadRequestException(
+        `Cannot decrement ${days} days; only ${balance.remainingDays} remain for employee ${employeeId}`,
+      );
+    }
+    balance.remainingDays -= days;
+    return repo.save(balance);
   }
 }
