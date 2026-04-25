@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { Repository } from 'typeorm';
+import { Balance } from '../balance/balance.entity';
 import { BalanceService } from '../balance/balance.service';
 import { CreateTimeOffRequestDto } from './dto/create-time-off-request.dto';
 import { TimeOffRequest, TimeOffStatus } from './time-off.entity';
@@ -23,9 +24,12 @@ export class TimeOffService {
       throw new BadRequestException('endDate must be on or after startDate');
     }
 
-    let balance;
+    let balance: Balance;
     try {
-      balance = await this.balanceService.findOne(dto.employeeId, dto.locationId);
+      balance = await this.balanceService.findOne(
+        dto.employeeId,
+        dto.locationId,
+      );
     } catch (err) {
       if (err instanceof NotFoundException) {
         throw new BadRequestException(

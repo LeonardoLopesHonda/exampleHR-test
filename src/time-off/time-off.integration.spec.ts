@@ -94,7 +94,7 @@ describe('TimeOffService (integration)', () => {
     );
   });
 
-  it('findByEmployee returns only that employee\'s requests', async () => {
+  it("findByEmployee returns only that employee's requests", async () => {
     await balanceRepo.save({
       employeeId: 'emp-a',
       locationId: 'loc-1',

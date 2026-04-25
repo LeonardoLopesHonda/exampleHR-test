@@ -26,11 +26,7 @@ describe('TimeOff (e2e)', () => {
     };
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [
-        TypeOrmModule.forRoot(dbConfig),
-        BalanceModule,
-        TimeOffModule,
-      ],
+      imports: [TypeOrmModule.forRoot(dbConfig), BalanceModule, TimeOffModule],
     }).compile();
 
     app = moduleFixture.createNestApplication();
@@ -68,27 +64,29 @@ describe('TimeOff (e2e)', () => {
       })
       .expect(201);
 
-    expect(create.body.id).toBeDefined();
-    expect(create.body.status).toBe(TimeOffStatus.PENDING);
+    const created = create.body as TimeOffRequest;
+    expect(created.id).toBeDefined();
+    expect(created.status).toBe(TimeOffStatus.PENDING);
 
     const fetched = await request(app.getHttpServer())
-      .get(`/timeoff/${create.body.id}`)
+      .get(`/timeoff/${created.id}`)
       .expect(200);
-    expect(fetched.body.id).toBe(create.body.id);
+    expect((fetched.body as TimeOffRequest).id).toBe(created.id);
 
     const list = await request(app.getHttpServer())
       .get('/timeoff')
       .query({ employeeId: 'emp-1' })
       .expect(200);
-    expect(list.body).toHaveLength(1);
-    expect(list.body[0].id).toBe(create.body.id);
+    const listBody = list.body as TimeOffRequest[];
+    expect(listBody).toHaveLength(1);
+    expect(listBody[0].id).toBe(created.id);
   });
 
   it('GET /balances/:employeeId/:locationId returns the balance', async () => {
     const res = await request(app.getHttpServer())
       .get('/balances/emp-1/loc-1')
       .expect(200);
-    expect(res.body.remainingDays).toBe(15);
+    expect((res.body as Balance).remainingDays).toBe(15);
   });
 
   it('POST /timeoff/request rejects invalid date format with 400', async () => {

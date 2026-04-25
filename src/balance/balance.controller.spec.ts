@@ -9,7 +9,9 @@ describe('BalanceController', () => {
   beforeEach(async () => {
     const module = await Test.createTestingModule({
       controllers: [BalanceController],
-      providers: [{ provide: BalanceService, useValue: { findOne: jest.fn() } }],
+      providers: [
+        { provide: BalanceService, useValue: { findOne: jest.fn() } },
+      ],
     }).compile();
 
     controller = module.get(BalanceController);

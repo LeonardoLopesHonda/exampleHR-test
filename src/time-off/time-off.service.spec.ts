@@ -67,7 +67,10 @@ describe('TimeOffService', () => {
     });
 
     it('rejects when daysRequested exceeds remainingDays', async () => {
-      balanceService.findOne.mockResolvedValue({ ...balance, remainingDays: 3 });
+      balanceService.findOne.mockResolvedValue({
+        ...balance,
+        remainingDays: 3,
+      });
 
       await expect(service.create(validDto)).rejects.toBeInstanceOf(
         BadRequestException,
@@ -86,7 +89,11 @@ describe('TimeOffService', () => {
 
     it('rejects when endDate is before startDate', async () => {
       balanceService.findOne.mockResolvedValue(balance);
-      const bad = { ...validDto, startDate: '2026-05-10', endDate: '2026-05-05' };
+      const bad = {
+        ...validDto,
+        startDate: '2026-05-10',
+        endDate: '2026-05-05',
+      };
 
       await expect(service.create(bad)).rejects.toBeInstanceOf(
         BadRequestException,
@@ -140,7 +147,9 @@ describe('TimeOffService', () => {
       const result = await service.findByEmployee('emp-1');
 
       expect(result).toEqual([]);
-      expect(repo.find).toHaveBeenCalledWith({ where: { employeeId: 'emp-1' } });
+      expect(repo.find).toHaveBeenCalledWith({
+        where: { employeeId: 'emp-1' },
+      });
     });
   });
 });
