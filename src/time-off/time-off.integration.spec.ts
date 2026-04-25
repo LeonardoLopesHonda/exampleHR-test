@@ -162,7 +162,9 @@ describe('TimeOffService (integration)', () => {
         return original(payload);
       });
 
-      const approved = await service.approve(created.id, { managerId: 'mgr-1' });
+      const approved = await service.approve(created.id, {
+        managerId: 'mgr-1',
+      });
 
       expect(approved.status).toBe(TimeOffStatus.APPROVED);
       expect(approved.managerId).toBe('mgr-1');

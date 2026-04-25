@@ -78,10 +78,7 @@ export class TimeOffService {
     return this.requestRepository.find({ where: { employeeId } });
   }
 
-  approve(
-    id: string,
-    dto: ApproveTimeOffRequestDto,
-  ): Promise<TimeOffRequest> {
+  approve(id: string, dto: ApproveTimeOffRequestDto): Promise<TimeOffRequest> {
     return this.dataSource.transaction(async (manager) => {
       const repo = manager.getRepository(TimeOffRequest);
       const request = await repo.findOne({ where: { id } });

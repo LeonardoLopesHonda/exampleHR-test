@@ -91,18 +91,18 @@ describe('BalanceService', () => {
     it('throws BadRequestException when remainingDays is below days', async () => {
       repo.findOne.mockResolvedValue({ ...existing, remainingDays: 2 });
 
-      await expect(service.decrement('emp-1', 'loc-1', 5)).rejects.toBeInstanceOf(
-        BadRequestException,
-      );
+      await expect(
+        service.decrement('emp-1', 'loc-1', 5),
+      ).rejects.toBeInstanceOf(BadRequestException);
       expect(repo.save).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the balance row is missing', async () => {
       repo.findOne.mockResolvedValue(null);
 
-      await expect(service.decrement('emp-1', 'loc-1', 1)).rejects.toBeInstanceOf(
-        NotFoundException,
-      );
+      await expect(
+        service.decrement('emp-1', 'loc-1', 1),
+      ).rejects.toBeInstanceOf(NotFoundException);
       expect(repo.save).not.toHaveBeenCalled();
     });
   });

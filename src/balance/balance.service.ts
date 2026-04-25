@@ -32,7 +32,9 @@ export class BalanceService {
     days: number,
     manager?: EntityManager,
   ): Promise<Balance> {
-    const repo = manager ? manager.getRepository(Balance) : this.balanceRepository;
+    const repo = manager
+      ? manager.getRepository(Balance)
+      : this.balanceRepository;
 
     const balance = await repo.findOne({ where: { employeeId, locationId } });
     if (!balance) {

@@ -7,7 +7,11 @@ import { TimeOffRequest } from './time-off.entity';
 import { TimeOffService } from './time-off.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([TimeOffRequest]), BalanceModule, HcmModule],
+  imports: [
+    TypeOrmModule.forFeature([TimeOffRequest]),
+    BalanceModule,
+    HcmModule,
+  ],
   controllers: [TimeOffController],
   providers: [TimeOffService],
   exports: [TimeOffService],

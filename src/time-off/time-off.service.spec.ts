@@ -102,24 +102,37 @@ describe('TimeOffService', () => {
     });
 
     it('rejects when daysRequested exceeds remainingDays', async () => {
-      balanceService.findOne.mockResolvedValue({ ...balance, remainingDays: 3 });
+      balanceService.findOne.mockResolvedValue({
+        ...balance,
+        remainingDays: 3,
+      });
 
-      await expect(service.create(validDto)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.create(validDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(repo.save).not.toHaveBeenCalled();
     });
 
     it('rejects when no balance row exists (NotFound surfaces as BadRequest)', async () => {
       balanceService.findOne.mockRejectedValue(new NotFoundException());
 
-      await expect(service.create(validDto)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.create(validDto)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(repo.save).not.toHaveBeenCalled();
     });
 
     it('rejects when endDate is before startDate', async () => {
       balanceService.findOne.mockResolvedValue(balance);
-      const bad = { ...validDto, startDate: '2026-05-10', endDate: '2026-05-05' };
+      const bad = {
+        ...validDto,
+        startDate: '2026-05-10',
+        endDate: '2026-05-05',
+      };
 
-      await expect(service.create(bad)).rejects.toBeInstanceOf(BadRequestException);
+      await expect(service.create(bad)).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
       expect(repo.save).not.toHaveBeenCalled();
     });
 
@@ -145,7 +158,9 @@ describe('TimeOffService', () => {
     it('throws NotFoundException when missing', async () => {
       repo.findOne.mockResolvedValue(null);
 
-      await expect(service.findOne('nope')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.findOne('nope')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -156,7 +171,9 @@ describe('TimeOffService', () => {
       const result = await service.findByEmployee('emp-1');
 
       expect(result).toEqual([]);
-      expect(repo.find).toHaveBeenCalledWith({ where: { employeeId: 'emp-1' } });
+      expect(repo.find).toHaveBeenCalledWith({
+        where: { employeeId: 'emp-1' },
+      });
     });
   });
 
@@ -169,11 +186,17 @@ describe('TimeOffService', () => {
         return e as TimeOffRequest;
       });
       hcm.submitApproval.mockResolvedValue({ hcmReferenceId: 'hcm-ref-1' });
-      balanceService.decrement.mockResolvedValue({ ...balance, remainingDays: 5 });
+      balanceService.decrement.mockResolvedValue({
+        ...balance,
+        remainingDays: 5,
+      });
 
       const result = await service.approve('req-1', { managerId: 'mgr-1' });
 
-      expect(savedStatuses).toEqual([TimeOffStatus.PROCESSING, TimeOffStatus.APPROVED]);
+      expect(savedStatuses).toEqual([
+        TimeOffStatus.PROCESSING,
+        TimeOffStatus.APPROVED,
+      ]);
 
       expect(hcm.submitApproval).toHaveBeenCalledWith({
         requestId: 'req-1',
@@ -198,7 +221,9 @@ describe('TimeOffService', () => {
       txnRepo.findOne.mockResolvedValue({ ...pendingRequest });
       const observed: TimeOffStatus[] = [];
       hcm.submitApproval.mockImplementation(async () => {
-        const last = txnRepo.save.mock.calls.at(-1)?.[0] as TimeOffRequest | undefined;
+        const last = txnRepo.save.mock.calls.at(-1)?.[0] as
+          | TimeOffRequest
+          | undefined;
         observed.push(last!.status);
         return { hcmReferenceId: 'hcm-ref-2' };
       });
