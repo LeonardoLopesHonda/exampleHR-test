@@ -28,14 +28,18 @@ export class HcmMockClient {
     this.programmed = [];
   }
 
-  async submitApproval(_payload: HcmApprovalPayload): Promise<HcmApprovalResult> {
+  submitApproval(_payload: HcmApprovalPayload): Promise<HcmApprovalResult> {
     const next = this.programmed.shift() ?? 'success';
     if (next === 'transient') {
-      throw new HcmTransientError('HCM transient failure (programmed)');
+      return Promise.reject(
+        new HcmTransientError('HCM transient failure (programmed)'),
+      );
     }
     if (next === 'permanent') {
-      throw new HcmPermanentError('HCM permanent failure (programmed)');
+      return Promise.reject(
+        new HcmPermanentError('HCM permanent failure (programmed)'),
+      );
     }
-    return { hcmReferenceId: randomUUID() };
+    return Promise.resolve({ hcmReferenceId: randomUUID() });
   }
 }

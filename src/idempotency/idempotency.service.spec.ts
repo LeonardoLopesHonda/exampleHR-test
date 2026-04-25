@@ -27,7 +27,12 @@ describe('IdempotencyService', () => {
   describe('lookup', () => {
     it('returns null when no row exists', async () => {
       repo.findOne.mockResolvedValue(null);
-      const result = await service.lookup('k', 'POST', '/timeoff/request', 'hash-a');
+      const result = await service.lookup(
+        'k',
+        'POST',
+        '/timeoff/request',
+        'hash-a',
+      );
       expect(result).toBeNull();
     });
 
@@ -42,7 +47,12 @@ describe('IdempotencyService', () => {
         createdAt: Date.now(),
       };
       repo.findOne.mockResolvedValue(row);
-      const result = await service.lookup('k', 'POST', '/timeoff/request', 'hash-a');
+      const result = await service.lookup(
+        'k',
+        'POST',
+        '/timeoff/request',
+        'hash-a',
+      );
       expect(result).toEqual(row);
     });
 
@@ -66,7 +76,9 @@ describe('IdempotencyService', () => {
   describe('store', () => {
     it('persists the response keyed by (key, method, path)', async () => {
       repo.save.mockImplementation(async (e) => e as IdempotencyKey);
-      await service.store('k', 'POST', '/timeoff/request', 'hash-a', 201, { id: 'req-1' });
+      await service.store('k', 'POST', '/timeoff/request', 'hash-a', 201, {
+        id: 'req-1',
+      });
       expect(repo.save).toHaveBeenCalledWith({
         key: 'k',
         method: 'POST',

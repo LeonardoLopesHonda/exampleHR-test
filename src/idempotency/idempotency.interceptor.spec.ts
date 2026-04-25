@@ -1,4 +1,8 @@
-import { ConflictException, ExecutionContext, CallHandler } from '@nestjs/common';
+import {
+  ConflictException,
+  ExecutionContext,
+  CallHandler,
+} from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { lastValueFrom, of, throwError } from 'rxjs';
 import { IdempotencyKey } from './idempotency-key.entity';
@@ -96,9 +100,9 @@ describe('IdempotencyInterceptor', () => {
     const next: CallHandler = {
       handle: () => throwError(() => new Error('boom')),
     };
-    await expect(lastValueFrom(interceptor.intercept(ctx, next))).rejects.toThrow(
-      'boom',
-    );
+    await expect(
+      lastValueFrom(interceptor.intercept(ctx, next)),
+    ).rejects.toThrow('boom');
     expect(service.store).not.toHaveBeenCalled();
   });
 });

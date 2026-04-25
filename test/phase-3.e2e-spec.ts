@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
+import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
 import { Balance } from '../src/balance/balance.entity';
 import { BalanceModule } from '../src/balance/balance.module';
@@ -15,7 +16,7 @@ import { TimeOffRequest } from '../src/time-off/time-off.entity';
 import { TimeOffModule } from '../src/time-off/time-off.module';
 
 describe('Phase 3 (e2e)', () => {
-  let app: INestApplication;
+  let app: INestApplication<App>;
   let hcm: HcmMockClient;
   let balanceRepo: Repository<Balance>;
   let jobRepo: Repository<RetryJob>;
@@ -80,7 +81,7 @@ describe('Phase 3 (e2e)', () => {
       .send(validBody)
       .expect(201);
 
-    expect(b.body.id).toBe(a.body.id);
+    expect((b.body as TimeOffRequest).id).toBe((a.body as TimeOffRequest).id);
   });
 
   it('approve with HCM permanent failure → request status FAILED, no retry job', async () => {
@@ -88,15 +89,16 @@ describe('Phase 3 (e2e)', () => {
       .post('/timeoff/request')
       .send(validBody)
       .expect(201);
+    const id = (created.body as TimeOffRequest).id;
 
     hcm.setNextResults(['permanent']);
 
     const approved = await request(app.getHttpServer())
-      .post(`/timeoff/${created.body.id}/approve`)
+      .post(`/timeoff/${id}/approve`)
       .send({ managerId: 'm' })
       .expect(201);
 
-    expect(approved.body.status).toBe('FAILED');
+    expect((approved.body as TimeOffRequest).status).toBe('FAILED');
     expect(await jobRepo.count()).toBe(0);
   });
 
@@ -105,15 +107,16 @@ describe('Phase 3 (e2e)', () => {
       .post('/timeoff/request')
       .send(validBody)
       .expect(201);
+    const id = (created.body as TimeOffRequest).id;
 
     hcm.setNextResults(['transient']);
 
     const approved = await request(app.getHttpServer())
-      .post(`/timeoff/${created.body.id}/approve`)
+      .post(`/timeoff/${id}/approve`)
       .send({ managerId: 'm' })
       .expect(201);
 
-    expect(approved.body.status).toBe('PROCESSING');
+    expect((approved.body as TimeOffRequest).status).toBe('PROCESSING');
     expect(await jobRepo.count()).toBe(1);
   });
 });

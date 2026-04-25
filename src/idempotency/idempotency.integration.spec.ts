@@ -2,17 +2,19 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { TypeOrmModule, getRepositoryToken } from '@nestjs/typeorm';
 import request from 'supertest';
+import { App } from 'supertest/types';
 import { Repository } from 'typeorm';
 import { Balance } from '../balance/balance.entity';
 import { BalanceModule } from '../balance/balance.module';
 import { HcmModule } from '../hcm/hcm.module';
+import { RetryModule } from '../retry/retry.module';
 import { TimeOffRequest } from '../time-off/time-off.entity';
 import { TimeOffModule } from '../time-off/time-off.module';
 import { IdempotencyKey } from './idempotency-key.entity';
 import { IdempotencyModule } from './idempotency.module';
 
 describe('Idempotency (integration)', () => {
-  let app: INestApplication;
+  let app: INestApplication<App>;
   let balanceRepo: Repository<Balance>;
 
   beforeEach(async () => {
@@ -27,6 +29,7 @@ describe('Idempotency (integration)', () => {
         BalanceModule,
         HcmModule,
         IdempotencyModule,
+        RetryModule,
         TimeOffModule,
       ],
     }).compile();
@@ -70,7 +73,9 @@ describe('Idempotency (integration)', () => {
       .send(validBody)
       .expect(201);
 
-    expect(second.body.id).toBe(first.body.id);
+    expect((second.body as TimeOffRequest).id).toBe(
+      (first.body as TimeOffRequest).id,
+    );
   });
 
   it('rejects same key with different body (409 Conflict)', async () => {
