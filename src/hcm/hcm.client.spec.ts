@@ -1,4 +1,4 @@
-import { HcmMockClient } from './hcm.client';
+import { HcmMockClient, HcmBalanceSnapshot } from './hcm.client';
 import { HcmPermanentError, HcmTransientError } from './hcm.errors';
 
 describe('HcmMockClient', () => {
@@ -56,5 +56,46 @@ describe('HcmMockClient', () => {
     await expect(client.submitApproval(payload)).resolves.toEqual({
       hcmReferenceId: expect.any(String),
     });
+  });
+});
+
+describe('HcmMockClient.getBalances', () => {
+  let client: HcmMockClient;
+
+  beforeEach(() => {
+    client = new HcmMockClient();
+  });
+
+  it('returns empty array when nothing programmed', async () => {
+    const result = await client.getBalances();
+    expect(result).toEqual([]);
+  });
+
+  it('returns programmed balances', async () => {
+    const balances: HcmBalanceSnapshot[] = [
+      {
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        totalDays: 25,
+        remainingDays: 20,
+      },
+    ];
+    client.setProgrammedBalances(balances);
+    const result = await client.getBalances();
+    expect(result).toEqual(balances);
+  });
+
+  it('clears programmed balances after first call', async () => {
+    client.setProgrammedBalances([
+      {
+        employeeId: 'emp-1',
+        locationId: 'loc-1',
+        totalDays: 25,
+        remainingDays: 20,
+      },
+    ]);
+    await client.getBalances();
+    const second = await client.getBalances();
+    expect(second).toEqual([]);
   });
 });

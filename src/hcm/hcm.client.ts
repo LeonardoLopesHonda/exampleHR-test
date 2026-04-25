@@ -14,11 +14,19 @@ export interface HcmApprovalResult {
   hcmReferenceId: string;
 }
 
+export interface HcmBalanceSnapshot {
+  employeeId: string;
+  locationId: string;
+  totalDays: number;
+  remainingDays: number;
+}
+
 export type HcmProgrammedResult = 'success' | 'transient' | 'permanent';
 
 @Injectable()
 export class HcmMockClient {
   private programmed: HcmProgrammedResult[] = [];
+  private programmedBalances: HcmBalanceSnapshot[] = [];
 
   setNextResults(results: HcmProgrammedResult[]): void {
     this.programmed = [...results];
@@ -26,6 +34,10 @@ export class HcmMockClient {
 
   clearProgrammed(): void {
     this.programmed = [];
+  }
+
+  setProgrammedBalances(balances: HcmBalanceSnapshot[]): void {
+    this.programmedBalances = [...balances];
   }
 
   submitApproval(_payload: HcmApprovalPayload): Promise<HcmApprovalResult> {
@@ -41,5 +53,11 @@ export class HcmMockClient {
       );
     }
     return Promise.resolve({ hcmReferenceId: randomUUID() });
+  }
+
+  getBalances(): Promise<HcmBalanceSnapshot[]> {
+    const result = this.programmedBalances;
+    this.programmedBalances = [];
+    return Promise.resolve(result);
   }
 }
