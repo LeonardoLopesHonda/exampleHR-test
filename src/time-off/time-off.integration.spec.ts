@@ -185,7 +185,7 @@ describe('TimeOffService (integration)', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('throws BadRequestException when the request is not PENDING', async () => {
+    it('rejects approving an already-APPROVED request with BadRequestException', async () => {
       await balanceRepo.save({
         employeeId: 'emp-1',
         locationId: 'loc-1',
@@ -238,7 +238,7 @@ describe('TimeOffService (integration)', () => {
       expect(balanceAfter?.remainingDays).toBe(10);
     });
 
-    it('throws BadRequestException when the request is not PENDING', async () => {
+    it('rejects re-rejecting an already-REJECTED request with BadRequestException', async () => {
       await balanceRepo.save({
         employeeId: 'emp-1',
         locationId: 'loc-1',

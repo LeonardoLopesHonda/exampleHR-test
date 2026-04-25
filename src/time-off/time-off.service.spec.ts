@@ -266,7 +266,7 @@ describe('TimeOffService', () => {
       expect(balanceService.decrement).not.toHaveBeenCalled();
     });
 
-    it('throws BadRequestException when the request is not PENDING', async () => {
+    it('rejects approving a non-PENDING request with BadRequestException', async () => {
       txnRepo.findOne.mockResolvedValue({
         ...pendingRequest,
         status: TimeOffStatus.APPROVED,
@@ -313,7 +313,7 @@ describe('TimeOffService', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
     });
 
-    it('throws BadRequestException when the request is not PENDING', async () => {
+    it('rejects rejecting a non-PENDING request with BadRequestException', async () => {
       repo.findOne.mockResolvedValue({
         ...pendingRequest,
         status: TimeOffStatus.REJECTED,
