@@ -47,14 +47,16 @@ A NestJS + SQLite microservice that manages employee time-off requests and leave
 
 The service is designed to handle the following scenarios. See the [PRD](./docs/) and `*.integration.spec.ts` files for the full specification.
 
-| Scenario               | Behaviour                                                              |
-| ---------------------- | ---------------------------------------------------------------------- |
-| Duplicate request      | Idempotency key returns the previously stored result.                  |
-| HCM success + DB fail  | Inconsistency is logged; retry runs asynchronously; batch sync reconciles. |
-| Concurrent approvals   | Row-level locking on `(employeeId, locationId)` prevents negative balances. |
-| Stale local balance    | Final validation is deferred to the approval phase via the HCM API.    |
-| HCM downtime           | Request stays in `PROCESSING` or transitions to `FAILED`; retried with exponential backoff. |
-| Out-of-sync balances   | Reconciled by the batch sync endpoint (HCM overrides local data).      |
+
+| Scenario              | Behaviour                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------- |
+| Duplicate request     | Idempotency key returns the previously stored result.                                       |
+| HCM success + DB fail | Inconsistency is logged; retry runs asynchronously; batch sync reconciles.                  |
+| Concurrent approvals  | Row-level locking on `(employeeId, locationId)` prevents negative balances.                 |
+| Stale local balance   | Final validation is deferred to the approval phase via the HCM API.                         |
+| HCM downtime          | Request stays in `PROCESSING` or transitions to `FAILED`; retried with exponential backoff. |
+| Out-of-sync balances  | Reconciled by the batch sync endpoint (HCM overrides local data).                           |
+
 
 ---
 
@@ -184,27 +186,31 @@ curl http://localhost:3000/
 
 ### Entities
 
-**`Balance`** (composite key: `employeeId` + `locationId`)
+`**Balance`** (composite key: `employeeId` + `locationId`)
 
-| Field           | Type    | Notes                          |
-| --------------- | ------- | ------------------------------ |
-| `employeeId`    | string  | Primary key (part 1)           |
-| `locationId`    | string  | Primary key (part 2)           |
-| `totalDays`     | integer | Total annual allowance         |
-| `remainingDays` | integer | Remaining balance              |
 
-**`TimeOffRequest`**
+| Field           | Type    | Notes                  |
+| --------------- | ------- | ---------------------- |
+| `employeeId`    | string  | Primary key (part 1)   |
+| `locationId`    | string  | Primary key (part 2)   |
+| `totalDays`     | integer | Total annual allowance |
+| `remainingDays` | integer | Remaining balance      |
 
-| Field           | Type    | Notes                                                              |
-| --------------- | ------- | ------------------------------------------------------------------ |
-| `id`            | string  | Primary key (server-assigned)                                      |
-| `employeeId`    | string  | Indexed                                                            |
-| `locationId`    | string  |                                                                    |
-| `startDate`     | string  | `YYYY-MM-DD`                                                       |
-| `endDate`       | string  | `YYYY-MM-DD`                                                       |
-| `daysRequested` | integer | Must be ≥ 1                                                        |
-| `status`        | string  | `PENDING \| PROCESSING \| APPROVED \| REJECTED \| FAILED`          |
-| `managerId`     | string? | Optional                                                           |
+
+`**TimeOffRequest**`
+
+
+| Field           | Type    | Notes                                                 |
+| --------------- | ------- | ----------------------------------------------------- |
+| `id`            | string  | Primary key (server-assigned)                         |
+| `employeeId`    | string  | Indexed                                               |
+| `locationId`    | string  |                                                       |
+| `startDate`     | string  | `YYYY-MM-DD`                                          |
+| `endDate`       | string  | `YYYY-MM-DD`                                          |
+| `daysRequested` | integer | Must be ≥ 1                                           |
+| `status`        | string  | `PENDING | PROCESSING | APPROVED | REJECTED | FAILED` |
+| `managerId`     | string? | Optional                                              |
+
 
 ### Seeding a balance manually
 
@@ -267,11 +273,13 @@ curl "http://localhost:3000/timeoff?employeeId=emp-1"
 
 Three layers of tests are wired up:
 
-| Layer       | Location                                | Command                  |
-| ----------- | --------------------------------------- | ------------------------ |
-| Unit        | `src/**/*.spec.ts` (excl. integration)  | `pnpm run test`          |
-| Integration | `src/**/*.integration.spec.ts`          | `pnpm run test` (same runner) |
-| End-to-end  | `test/*.e2e-spec.ts`                    | `pnpm run test:e2e`      |
+
+| Layer       | Location                               | Command                       |
+| ----------- | -------------------------------------- | ----------------------------- |
+| Unit        | `src/**/*.spec.ts` (excl. integration) | `pnpm run test`               |
+| Integration | `src/**/*.integration.spec.ts`         | `pnpm run test` (same runner) |
+| End-to-end  | `test/*.e2e-spec.ts`                   | `pnpm run test:e2e`           |
+
 
 Common workflows:
 
@@ -298,20 +306,22 @@ Both `test` and `test:e2e` run with `--verbose` so each individual case is print
 
 ## Available Scripts
 
-| Script              | Purpose                                                        |
-| ------------------- | -------------------------------------------------------------- |
-| `pnpm run start`    | Start the app (no watch).                                      |
-| `pnpm run start:dev`| Start in watch mode.                                           |
-| `pnpm run start:debug` | Watch mode with `--inspect` for attaching a debugger.       |
-| `pnpm run start:prod`| Run the compiled output (`node dist/main`).                   |
-| `pnpm run build`    | Compile TypeScript to `dist/`.                                 |
-| `pnpm run lint`     | ESLint + Prettier (auto-fix).                                  |
-| `pnpm run format`   | Prettier-only formatting.                                      |
-| `pnpm run test`     | Unit + integration tests (verbose).                            |
-| `pnpm run test:watch` | Tests in watch mode.                                         |
-| `pnpm run test:cov` | Tests with coverage.                                           |
-| `pnpm run test:debug` | Tests under Node Inspector.                                  |
-| `pnpm run test:e2e` | End-to-end tests (verbose).                                    |
+
+| Script                 | Purpose                                               |
+| ---------------------- | ----------------------------------------------------- |
+| `pnpm run start`       | Start the app (no watch).                             |
+| `pnpm run start:dev`   | Start in watch mode.                                  |
+| `pnpm run start:debug` | Watch mode with `--inspect` for attaching a debugger. |
+| `pnpm run start:prod`  | Run the compiled output (`node dist/main`).           |
+| `pnpm run build`       | Compile TypeScript to `dist/`.                        |
+| `pnpm run lint`        | ESLint + Prettier (auto-fix).                         |
+| `pnpm run format`      | Prettier-only formatting.                             |
+| `pnpm run test`        | Unit + integration tests (verbose).                   |
+| `pnpm run test:watch`  | Tests in watch mode.                                  |
+| `pnpm run test:cov`    | Tests with coverage.                                  |
+| `pnpm run test:debug`  | Tests under Node Inspector.                           |
+| `pnpm run test:e2e`    | End-to-end tests (verbose).                           |
+
 
 ---
 
@@ -319,7 +329,8 @@ Both `test` and `test:e2e` run with `--verbose` so each individual case is print
 
 The codebase is built phase-by-phase. The active phase is communicated per session — do not introduce hooks, abstractions, or interfaces for future phases.
 
-- **Phase 1 — Core API & data layer** _(current)_: schema, TimeOffRequest creation/read, balance read.
+- **Phase 1 — Core API & data layer** *(current)*: schema, TimeOffRequest creation/read, balance read.
 - **Phase 2 — Approval flow + HCM mock integration**: `POST /timeoff/:id/approve`, `POST /timeoff/:id/reject`, mocked HCM client.
 - **Phase 3 — Idempotency, retries, failure handling**: idempotency keys, retry/backoff, structured failure logging.
 - **Phase 4 — Batch sync, edge cases**: `POST /sync/batch`, reconciliation, race-condition hardening.
+
