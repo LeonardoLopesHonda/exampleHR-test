@@ -22,8 +22,12 @@ describe('HcmMockClient', () => {
 
   it('consumes programmed results in order', async () => {
     client.setNextResults(['transient', 'transient', 'success']);
-    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(HcmTransientError);
-    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(HcmTransientError);
+    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(
+      HcmTransientError,
+    );
+    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(
+      HcmTransientError,
+    );
     await expect(client.submitApproval(payload)).resolves.toEqual({
       hcmReferenceId: expect.any(String),
     });
@@ -31,12 +35,16 @@ describe('HcmMockClient', () => {
 
   it('throws HcmPermanentError when programmed', async () => {
     client.setNextResults(['permanent']);
-    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(HcmPermanentError);
+    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(
+      HcmPermanentError,
+    );
   });
 
   it('falls back to default success after the program is exhausted', async () => {
     client.setNextResults(['transient']);
-    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(HcmTransientError);
+    await expect(client.submitApproval(payload)).rejects.toBeInstanceOf(
+      HcmTransientError,
+    );
     await expect(client.submitApproval(payload)).resolves.toEqual({
       hcmReferenceId: expect.any(String),
     });
